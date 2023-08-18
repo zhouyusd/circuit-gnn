@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import os
-import time
+from easydict import EasyDict
 import matplotlib.pyplot as plt
 
 
@@ -32,10 +32,12 @@ def get_pass_band(y):
     s = to_db(s)
     idx = np.argmax(s)
     s_max = np.max(s)
-    l, r = idx, idx
-    while l > 0 and s[l - 1] > s_max - 3: l -= 1
-    while r + 1 < len(s) and s[r + 1] > s_max - 3: r += 1
-    return (to_ghz(l), to_ghz(r)), s_max
+    ll, rr = idx, idx
+    while ll > 0 and s[ll - 1] > s_max - 3:
+        ll -= 1
+    while rr + 1 < len(s) and s[rr + 1] > s_max - 3:
+        rr += 1
+    return (to_ghz(ll), to_ghz(rr)), s_max
 
 
 def get_iou(x, y):
@@ -65,7 +67,6 @@ def get_u_info(u):
     idx = (5.0 / 8 <= u) & (u < 7.0 / 8)  # down open
     u_side[idx, 3] = 1
     u_shift[idx, 3] = u[idx] - 6.0 / 8
-
     assert (u_side.sum(1) == 1).all()
     assert (u_shift <= 1.0 / 8).all()
     assert (u_shift >= - 1.0 / 8).all()
@@ -99,7 +100,7 @@ model.eval()
 def construct_objective(band, cutoff_width=0.5,
                         alpha=0.5, beta=0.75):
     """
-    :param band: the range of passband from band[0] GHz to band[1] GHz
+    :param band: the range of pass band from band[0] GHz to band[1] GHz
     :param cutoff_width: the transition region from PASS to SUPRESS
     :param alpha: loss weighting for pass band and non-pass band
     :param beta: loss weighting for near non-pass band and far non-pass band
@@ -114,12 +115,12 @@ def construct_objective(band, cutoff_width=0.5,
     l, r, ll, rr, lll, rrr = [int((x - 200) / (400 - 200) * 5001) for x in [l, r, ll, rr, lll, rrr]]
 
     def obj(x):
-        # in the passband we want 'x' to be 1
+        # in the pass band we want 'x' to be 1
         loss_pass = ((1 - x[:, l:r]) ** 2).mean(1)
-        # ous the passband we want 'x' to be 0
+        # ous the pass band we want 'x' to be 0
         loss_cutoff = ((x[:, lll:ll] ** 2).sum(1) + (x[:, rr:rrr] ** 2).sum(1)) / (ll - lll + rrr - rr)
         loss_faroff = ((x[:, :lll] ** 2).sum(1) + (x[:, rrr:] ** 2).sum(1)) / (lll - 0 + 5001 - rrr)
-        # use beta the balance the error of the region near the passband and far from the passband
+        # use beta the balance the error of the region near the pass band and far from the pass band
         # beta somehow control the sharpness of the cutoff
         loss_off = loss_cutoff * beta + loss_faroff * (1 - beta)
         loss = loss_pass * alpha + loss_off * (1 - alpha)
@@ -130,11 +131,6 @@ def construct_objective(band, cutoff_width=0.5,
 
 # ======================================================================================================================
 def prepare_input_batch(para):
-    """
-    :param xy, a, u_info: B x N x len_feature
-    :return:
-    """
-
     xy, a, u_info = para
     a = a[:, :, 0]
     B, N = a.size(0), a.size(1)
@@ -191,8 +187,6 @@ def prepare_input_batch(para):
 
 
 # ======================================================================================================================
-from easydict import EasyDict
-
 STATS_VAR = EasyDict()
 STATS_VAR.node_attr = to_tensor(STATS.node_attr)
 STATS_VAR.edge_attr = to_tensor(STATS.edge_attr)
@@ -214,7 +208,7 @@ def point_in_box(x1, x2, y1, y2, u, v):
 
 def box_collision_batch(x1, x2, y1, y2, u1, u2, v1, v2):
     return point_in_box(x1, x2, y1, y2, u1, v1) | point_in_box(x1, x2, y1, y2, u1, v2) | \
-           point_in_box(x1, x2, y1, y2, u2, v1) | point_in_box(x1, x2, y1, y2, u2, v2)
+        point_in_box(x1, x2, y1, y2, u2, v1) | point_in_box(x1, x2, y1, y2, u2, v2)
 
 
 def atanh(x):
@@ -288,7 +282,7 @@ class InverseDesigner(object):
 
         max_gap = a[:, 0] * CONST.gap_max_ratio
         min_gap = a[:, 0] * CONST.gap_min_ratio
-        # print('max min gap', max_gap.shape, min_gap.shape)
+        print('max min gap', max_gap.shape, min_gap.shape)
 
         four_directions = np.array(
             [[1, 0], [0, -1], [-1, 0], [0, 1]]
@@ -439,8 +433,10 @@ class InverseDesigner(object):
         for i in range(raw.shape[0]):
             for j in range(raw.shape[1]):
                 # print('u x y a w', u[i, j], x[i, j], y[i, j], a[i, j], w[i, j])
-                while u[i, j] > 1: u[i, j] -= 1
-                while u[i, j] < 0: u[i, j] += 1
+                while u[i, j] > 1:
+                    u[i, j] -= 1
+                while u[i, j] < 0:
+                    u[i, j] += 1
                 slit_info = np.array(get_gap(u[i, j], x[i, j], y[i, j], a[i, j], w[i, j]))
                 raw[i, j, 4:8] = slit_info
         return raw
@@ -448,7 +444,8 @@ class InverseDesigner(object):
     def main(self, vis=False):
         iter_step = 20
         num_iter = 10
-        total_step = iter_step * num_iter
+        # total_step = iter_step * num_iter
+        pred, tmp_loss = None, None
 
         for it in range(num_iter):
             if (it + 1) % 5 == 0:
@@ -472,7 +469,7 @@ class InverseDesigner(object):
 
         optimized_raw = self.to_raw_final()
         i = np.argmin(tmp_loss)
-        tag = int(time.time()) % 1000000
+        # tag = int(time.time()) % 1000000
 
         our_para = optimized_raw[i]
         our_pred = to_np(pred[i])
@@ -497,7 +494,11 @@ class InverseDesigner(object):
             plot_pred_band(ax[1], our_band)
             plt.legend()
             ax[0].set_title('Circuit')
-            ax[1].set_title(f'Target band [{self.target_band[0]},{self.target_band[1]}], Delivered band [{our_band[0]:.0f},{our_band[1]:.0f}]\nIOU: {IOU*100:.1f} Insertion Loss: {-our_H:.1f}db')
+            ax[1].set_title(
+                f'Target band [{self.target_band[0]},{self.target_band[1]}], '
+                f'Delivered band [{our_band[0]:.0f},{our_band[1]:.0f}]\n'
+                f'IOU: {IOU * 100:.1f} '
+                f'Insertion Loss: {-our_H:.1f}db')
             plt.show()
             plt.close()
 
@@ -512,7 +513,7 @@ class InverseDesigner(object):
 def solve(target_band,
           alpha, beta, cutoff_width,
           vis):
-    the_num = 4
+    the_num = 6
     the_type = 2
 
     generator = CircuitGenerator(num_resonator=the_num, a_range=[50, 90])
@@ -532,21 +533,21 @@ def solve(target_band,
 
 # ======================================================================================================================
 def load_band(txt):
-    l = open(txt, 'r').readlines()[-1]
-    l = l.strip().split()
-    ctr = float(l[0])
-    bw = float(l[1])
+    ll = open(txt, 'r').readlines()[-1]
+    ll = ll.strip().split()
+    ctr = float(ll[0])
+    bw = float(ll[1])
     return ctr - bw / 2, ctr + bw / 2
 
 
-def random_float(l, r):
-    return np.random.rand() * (r - l) + l
+def random_float(ll, rr):
+    return np.random.rand() * (rr - ll) + ll
 
 
 if __name__ == '__main__':
     from progressbar import ProgressBar
 
-    band_list = [(260, 290)]
+    band_list = [(260, 290), (320, 260)]
 
     bar = ProgressBar()
     IOU_list = []

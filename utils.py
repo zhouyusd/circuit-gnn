@@ -79,8 +79,8 @@ def count_parameters(model):
 
 def mix_iters(iters):
     table = []
-    for i, iter in enumerate(iters):
-        table += [i] * len(iter)
+    for i, ite in enumerate(iters):
+        table += [i] * len(ite)
     np.random.shuffle(table)
     for i in table:
         yield iters[i].next()
